@@ -1,0 +1,360 @@
+type: edu
+custom_name: stage6
+files:
+- name: test/common/DialogClue.kt
+  visible: false
+  text: |
+    package common
+
+    import org.hyperskill.hstest.testcase.CheckResult
+    import org.hyperskill.hstest.testcase.TestCase
+
+
+    // ---- DialogClue ----
+
+    /** May be several lines or just one. */
+    interface Phrase {
+        fun toPhraseLines(): List<PhraseLine>
+    }
+
+    /** list of input and output lines, combined together. */
+    fun compositePhrase(block: () -> List<Phrase>) = object : Phrase {
+        override fun toPhraseLines() = block().flatMap { it.toPhraseLines() }
+    }
+
+    fun compositePhrase(vararg phrases: Phrase) = object : Phrase {
+        override fun toPhraseLines() = phrases.flatMap { it.toPhraseLines() }
+    }
+
+    /** Either user (input) or output phrase. Each phrase should be a line. */
+    sealed class PhraseLine : Phrase {
+        override fun toPhraseLines() = listOf(this)
+    }
+
+    /** Some mutable data, that is passed across dialog phrases. */
+    class Context {
+        val rawData = mutableMapOf<String, Any>()
+    }
+
+    class UserLine(val text: String, val updateContext: CtxUpdate = {}) : PhraseLine() {
+
+    }
+    typealias CtxUpdate = (ctx: Context) -> Unit
+
+    class OutputLine(val checker: (text: String, ctx: Context) -> CheckResult) : PhraseLine()
+
+    /** This function creates a line with user input (our test input).
+     *
+     * Unfortunately we can't access the Context, when we adding user text.
+     * This occurs because of HS test framework limitations:
+     * we need to pass all inputs first, and then start checking outputs. */
+    fun user(text: String, updateContext: (ctx: Context) -> Unit = {}) = UserLine(text, updateContext)
+
+    fun anyLine(updateContext: CtxUpdate = {}) = OutputLine { _, ctx -> CheckResult.correct().also { updateContext(ctx) } }
+
+    fun containing(
+            vararg parts: String,
+            ignoreCase: Boolean = true,
+            hint: String? = null,
+            updateContext: CtxUpdate = {}
+    ) = OutputLine { line, context ->
+        fun buildFeedback(): String {
+            val feedback = StringBuilder()
+            feedback.append("Your line\n`$line`\nshould contain ${parts.joinToString("`, `", "`", "`")}")
+            if (ignoreCase) {
+                feedback.append(" (ignoring case)")
+            }
+            feedback.append(".")
+            if (hint != null) {
+                feedback.append("\n$hint")
+            }
+            return feedback.toString()
+        }
+
+        var startIndex = 0
+        for (part in parts) {
+            startIndex = line.indexOf(part, startIndex, ignoreCase)
+            if (startIndex == -1) {
+                return@OutputLine CheckResult.wrong(buildFeedback())
+            }
+        }
+        updateContext(context) // everything is correct, update context
+        CheckResult.correct();
+    }
+
+    class DialogClue(private val phrases: List<PhraseLine>) {
+
+        private val inputPhrases = phrases.filter { it is UserLine }.map { it as UserLine }
+        private val outputPhrases = phrases.filter { it is OutputLine }.map { it as OutputLine }
+
+        fun generateInput() = inputPhrases
+                .joinToString("\n", postfix = "\n") { it.text }
+
+        fun checkOutput(output: String): CheckResult {
+            val lines = output.lines()
+                    .filter { it.isNotBlank() }
+
+            fun wrongOutputSizeFeedback() = CheckResult.wrong("The number of lines in your output is ${lines.size}, " +
+                    "but it should be ${outputPhrases.size}. " +
+                    "Check, that you output your lines with println, not print. And there are no extra outputs.")
+
+    // here we store some mutable data from phrase to phrase
+            val context = Context()
+
+            val lineIter = lines.listIterator()
+            phrases.forEach { phraseLine ->
+                when (phraseLine) {
+                    is UserLine -> phraseLine.updateContext(context)
+                    is OutputLine -> {
+                        if (!lineIter.hasNext()) {
+                            return wrongOutputSizeFeedback()
+                        }
+                        val result = phraseLine.checker(lineIter.next(), context)
+                        if (!result.isCorrect) {
+                            return CheckResult.wrong(result.feedback)
+                        }
+                    }
+                }
+            }
+
+            if (lineIter.hasNext()) {
+                return wrongOutputSizeFeedback()
+            }
+
+            return CheckResult.correct();
+        }
+    }
+
+    fun dialogTest(vararg phrases: Phrase): TestCase<DialogClue> {
+        val dialogClue = DialogClue(phrases.flatMap { it.toPhraseLines() })
+        return TestCase<DialogClue>()
+                .setInput(dialogClue.generateInput())
+                .setAttach(dialogClue)
+    }
+  learner_created: false
+- name: test/FlashcardsTest.java
+  visible: false
+  text: |
+    import common.FlashcardsStage6Test;
+
+    public class FlashcardsTest extends FlashcardsStage6Test {
+        // just empty class, but not abstract so it can be run
+    }
+  learner_created: false
+- name: src/flashcards/Main.java
+  visible: true
+  text: |
+    package flashcards;
+
+    import java.io.FileNotFoundException;
+    import java.io.PrintWriter;
+    import java.util.*;
+    import java.io.File;
+
+    public class Main
+    {
+        static Scanner sc = new Scanner(System.in);
+        static Map<String, String> map = new LinkedHashMap<>();
+        static boolean end = false;
+
+        public static void main(String[] args) throws FileNotFoundException, InputMismatchException
+        {
+            while (!end)
+            {
+                System.out.println("Input the action (add, remove, import, export, ask, exit): ");
+                String action = sc.next().trim().toLowerCase();
+                sc.nextLine();
+
+                switch (action)
+                {
+                    case "add":
+                        addCard();
+                        break;
+                    case "remove":
+                        removeCard();
+                        break;
+                    case "import":
+                        importCards();
+                        break;
+                    case "export":
+                        exportCards();
+                        break;
+                    case "ask":
+                        askCards();
+                        break;
+                    case "exit":
+                        finish();
+                        break;
+                    default:
+                        System.out.println("Not an action. Try again: ");
+                }
+            }
+        }
+
+        /*private static void start()
+        {
+            System.out.println("Enter the number of cards: ");
+            firstNumberOfCards = sc.nextInt();
+            sc.nextLine();
+        }*/
+
+        private static void addCard()
+        {
+            System.out.println("The term of the card:");
+
+            String term = sc.nextLine();
+            if (map.containsKey(term))
+            {
+                System.out.println("The card  \"" + term + "\" already exists. Try again: ");
+                return;
+            }
+
+            System.out.println("The definition of the card:");
+
+            String def = sc.nextLine();
+            if (map.containsValue(def))
+            {
+                System.out.println("The definition \"" + def + "\" already exists. Try again: ");
+                return;
+            }
+
+            map.put(term, def);
+            System.out.println("The pair (\"" + term + "\":\"" + def + "\") has been added");
+        }
+
+        private static void removeCard()
+        {
+            System.out.println("The card: ");
+
+            String term = sc.nextLine().trim().toLowerCase();
+            if (!map.containsKey(term))
+            {
+                System.out.println("Can't remove \"" + term + "\": there is no such card.");
+                return;
+            }
+            else
+            {
+                map.remove(term, map.get(term));
+                System.out.println("The card has been removed.");
+            }
+        }
+
+        private static void askCards() throws InputMismatchException
+        {
+            System.out.println("How many times to ask?");
+            int asks = sc.nextInt();
+            int i = 0;
+            while (i <= asks)
+            {
+                for (String s : map.keySet())
+                {
+
+                    if (i == asks)
+                    {
+                        return;
+                    }
+                    System.out.println("Print the definition of \"" + s + "\":");
+                    String ans = sc.next();
+
+                    if (map.get(s).equals(ans))
+                    {
+                        System.out.println("Correct answer");
+                    }
+                    else
+                    {
+                        if (map.containsValue(ans))
+                        {
+                            System.out.println("Wrong answer. The correct one is \"" + map.get(s) + "\""
+                                    + ", you've just written the definition of \"" + getKey(ans) + "\".");
+                        }
+                        else
+                        {
+                            System.out.println("Wrong answer. The correct one is \"" + map.get(s) + "\".");
+                        }
+                    }
+                    i++;
+                }
+            }
+        }
+
+        public static String getKey(String value)
+        {
+            for (Map.Entry<String, String> entry : map.entrySet())
+            {
+                if (entry.getValue().equals(value))
+                {
+                    return entry.getKey();
+                }
+            }
+            return null;
+        }
+
+        public static void importCards()
+        {
+            Map<String, String> fileMap = new LinkedHashMap<>();
+
+            System.out.println("File name: ");
+            String fileName = sc.nextLine();
+            File file = new File(fileName);
+
+            try
+            {
+                Scanner fileReader = new Scanner(file.getAbsoluteFile());
+                int i = 1;
+
+                while (fileReader.hasNextLine())
+                {
+                    String term = fileReader.nextLine().trim().toLowerCase();
+                    String def = fileReader.nextLine().trim().toLowerCase();
+
+                    if (fileMap.containsKey(term) || fileMap.containsValue(def))
+                    {
+                        fileMap.replace(term, def);
+                    }
+                    else
+                    {
+                        fileMap.put(term, def);
+                    }
+                }
+
+                map.putAll(fileMap);
+                System.out.println(i + " cards have been loaded.");
+                fileReader.close();
+            }
+            catch (FileNotFoundException e)
+            {
+                System.out.println("File not found.");
+            }
+        }
+
+        public static void exportCards() throws FileNotFoundException
+        {
+            System.out.println("File name");
+            String filepath = sc.nextLine();
+
+            File file = new File(filepath);
+            PrintWriter fileWriter = new PrintWriter(file);
+
+            fileWriter.println(map.toString());
+            System.out.println(map.size() + " cards have been saved.");
+        }
+
+        public static void finish()
+        {
+            end = true;
+            System.out.println("Bye bye!");
+        }
+    }
+  learner_created: false
+- name: capitalsNew.txt
+  visible: true
+  learner_created: false
+- name: capitals.txt
+  visible: true
+  learner_created: true
+- name: src/flashcards/Main.class
+  visible: true
+  learner_created: true
+feedback_link: https://hyperskill.org/projects/44/stages/237/implement
+status: Solved
+record: 6
